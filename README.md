@@ -93,7 +93,7 @@ make test          # Run tests in virtual environment
 
 ### Operation
 
-- Press the configured hotkey (default: **F12**) to start transcribing
+- Press the configured hotkey (default: **F10**) to start transcribing
 - Press again to stop → transcribes, copies to clipboard, and types into active input
 - Press **Ctrl+C** to quit (when running manually)
 

@@ -283,7 +283,7 @@ class TestStreamingDictation:
         dictation.threads_pool.submit = mock_submit
         
         # Mock the worker methods to prevent them from running
-        dictation._record_chunks_coordinator = MagicMock()
+        dictation._record_chunks_worker = MagicMock()
         dictation._transcription_worker = MagicMock()
         dictation._typing_worker = MagicMock()
         
@@ -374,7 +374,7 @@ class TestStreamingDictation:
         
         dictation._transcription_worker = mock_transcription_worker
         dictation._typing_worker = mock_typing_worker
-        dictation._record_chunks_coordinator = MagicMock()
+        dictation._record_chunks_worker = MagicMock()
         dictation._finalize_transcription = MagicMock(return_value="")
         
         # First recording session

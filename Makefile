@@ -20,6 +20,16 @@ run-stream:
 		exit 1; \
 	fi
 
+run-stream-verbose:
+	@if command -v uv >/dev/null 2>&1; then \
+		uv run python dictate.py --streaming --verbose; \
+	elif command -v poetry >/dev/null 2>&1; then \
+		poetry run python dictate.py --streaming --verbose; \
+	else \
+		echo "Error: Neither uv nor poetry found. Please install one of them."; \
+		exit 1; \
+	fi
+
 run-no-stream:
 	@if command -v uv >/dev/null 2>&1; then \
 		uv run python dictate.py --no-streaming; \
