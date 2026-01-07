@@ -52,6 +52,7 @@ def load_config():
         "auto_type": config.getboolean("behavior", "auto_type", fallback=True),
         "auto_sentence": config.getboolean("behavior", "auto_sentence", fallback=True),
         "typing_delay": config.getfloat("behavior", "typing_delay", fallback=0.01),
+        "save_recordings": config.getboolean("behavior", "save_recordings", fallback=False),
         # Streaming
         "streaming_chunk_seconds": config.getfloat("streaming", "streaming_chunk_seconds", fallback=3.0),
         "streaming_overlap_seconds": config.getfloat("streaming", "streaming_overlap_seconds", fallback=1.5),
@@ -241,11 +242,11 @@ class Dictation:
             return
 
         self.recording = True
-        self.temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        self.temp_file.close()
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        self.temp_file = os.path.join(tempfile.gettempdir(), f"recording_{timestamp}.wav")
 
         # Record using arecord (ALSA) - works on most Linux systems
-        self.record_process = self.start_record_process(self.temp_file.name)
+        self.record_process = self.start_record_process(self.temp_file)
         logger.info("[record] Recording...")
         self.notify("Recording...", f"Release {self.get_hotkey_name().upper()} when done", "audio-input-microphone", 2000)
 
@@ -274,7 +275,7 @@ class Dictation:
             return
 
         # Transcribe.
-        temp_file_name = self.temp_file.name if self.temp_file else None
+        temp_file_name = self.temp_file if self.temp_file else None
         try:
             if not temp_file_name or not os.path.exists(temp_file_name):
                 logger.error(f"Cannot transcribe: audio file not found: {temp_file_name}")
@@ -315,8 +316,8 @@ class Dictation:
             logger.error(f"Error transcribing: {e}", exc_info=True)
             self.notify("Error", str(e)[:50], "dialog-error", 3000)
         finally:
-            # Cleanup temp file
-            if temp_file_name and os.path.exists(temp_file_name):
+            # Cleanup temp file unless save_recordings is enabled.
+            if temp_file_name and not self.config["save_recordings"]:
                 os.unlink(temp_file_name)
 
 
@@ -365,7 +366,7 @@ class StreamingDictation(Dictation):
         self.typing_queue = queue.Queue()  # FIFO queue for typing tasks
 
         # Streaming state
-        self.active_recordings: dict[int, tuple[str, subprocess.Popen, float]] = {}  # chunk_index -> (file_path, process, start_time)
+        self.stopping = False
         self.record_thread: Optional[threading.Thread] = None
         self.accumulated_words: list[Word] = []
 
@@ -397,17 +398,18 @@ class StreamingDictation(Dictation):
         if self.recording:
             logger.error("[record] Recording is already started")
             return
+        if self.stopping:
+            logger.error("[record] Cannot start recording: previous recording is still shutting down")
+            self.notify("Error", "Previous recording is still shutting down. Please wait a moment.", "dialog-error", 3000)
+            return
         self.model_loaded.wait()
         if self.model_error or self.model is None:
             logger.error("[record] Cannot start recording yet")
             self.notify("Error", "Model is not loaded yet", "dialog-error", 3000)
             return
-
         # Reset transcription state.
         self.recording = True
-        self.active_recordings = {}
         self.accumulated_words = []
-
         # Clear queues to remove any leftover sentinels from previous recording
         while not self.transcription_queue.empty():
             try:
@@ -419,7 +421,6 @@ class StreamingDictation(Dictation):
                 self.typing_queue.get_nowait()
             except queue.Empty:
                 break
-
         # Recreate thread pool (it may have been shut down from previous recording)
         try:
             self.threads_pool.shutdown(wait=False)
@@ -427,39 +428,33 @@ class StreamingDictation(Dictation):
             # Already shut down, ignore
             pass
         self.threads_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="streaming")
-
-        # Start transcription worker (1 thread in pool)
+        # Start transcription worker (1 thread in pool).
         self.threads_pool.submit(self._transcription_worker)
-        # Start typing worker (1 thread in pool)
+        # Start typing worker (1 thread in pool).
         if self.config["auto_type"]:
             self.typer = Typer(
                 delay_ms=int(self.config["typing_delay"] * 1000),
                 start_delay_ms=100
             )
             self.threads_pool.submit(self._typing_worker)
-        # Start recording coordinator thread
+        # Start recording coordinator thread.
         self.record_thread = threading.Thread(target=self._record_chunks_worker, daemon=True)
         self.record_thread.start()
-
+        # Notify about recording start.
         logger.info("[record] Recording (streaming mode)...")
         self.notify("Recording...", f"Press {self.get_hotkey_name().upper()} when done", "audio-input-microphone", 1500)
 
     def _record_single_chunk(self, chunk_idx: int, chunk_start_time: float) -> tuple[str, float, int]:
         """Record a single chunk in thread pool. Returns (file_path, actual_start_time)."""
-        chunk_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        chunk_file.close()
-
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        chunk_file_path = os.path.join(tempfile.gettempdir(), f"chunk_{chunk_idx}_{timestamp}.wav")
         # Start recording this chunk (with duration limit)
-        chunk_process = self.start_record_process(chunk_file.name, duration=self.streaming_chunk_seconds)
-        self.active_recordings[chunk_idx] = (chunk_file.name, chunk_process, chunk_start_time)
-        logger.info(f"[record] Chunk {chunk_idx} started recording to {chunk_file.name}")
+        chunk_process = self.start_record_process(chunk_file_path, duration=self.streaming_chunk_seconds)
+        logger.info(f"[record] Chunk {chunk_idx} started recording to {chunk_file_path}")
         # Wait for recording to finish
         chunk_process.wait()
         logger.debug(f"[record] Chunk {chunk_idx} recording finished")
-        # Remove from active recordings
-        if chunk_idx in self.active_recordings:
-            del self.active_recordings[chunk_idx]
-        return (chunk_file.name, chunk_start_time, chunk_idx)
+        return (chunk_file_path, chunk_start_time, chunk_idx)
 
     def _record_chunks_worker(self):
         """Thread worker for recording chunks."""
@@ -468,13 +463,11 @@ class StreamingDictation(Dictation):
             recording_start_time = time.time()
             while self.recording:
                 current_time = time.time()
-
                 # Start new chunk
                 chunk_index += 1
                 chunk_start_time = current_time if recording_start_time is None else recording_start_time + (chunk_index - 1) * self.streaming_overlap_seconds
                 # Submit recording task to thread pool (2 recording threads)
                 future = self.threads_pool.submit(self._record_single_chunk, chunk_index, chunk_start_time)
-
                 # When recording finishes, queue for transcription
                 def on_recording_done(fut):
                     try:
@@ -484,7 +477,6 @@ class StreamingDictation(Dictation):
                         logger.error(f"[record] Error in recording chunk {chunk_idx}: {e}", exc_info=True)
 
                 future.add_done_callback(on_recording_done)
-
                 # Calculate exact time when next chunk should start
                 next_chunk_start_time = recording_start_time + chunk_index * self.streaming_overlap_seconds
                 # Measure time after task submission to account for execution time
@@ -508,28 +500,26 @@ class StreamingDictation(Dictation):
                 trans_start = time.time()
                 new_segments, speech_duration = self._transcribe_chunk(chunk_file_path, chunk_idx, chunk_absolute_start_time)
                 trans_duration = time.time() - trans_start
-                # Remove temp file
-                try:
-                    logger.debug(f"[transcriber] Chunk {chunk_idx} file {chunk_file_path} deleted")
-                    os.unlink(chunk_file_path)
-                except Exception as e:
-                    logger.warning(f"[transcriber] Chunk {chunk_idx} file {chunk_file_path} failed to delete: {e}")
-
+                # Remove temp file unless save_recordings is enabled
+                if not self.config["save_recordings"]:
+                    try:
+                        logger.debug(f"[transcriber] Chunk {chunk_idx} file {chunk_file_path} deleted")
+                        os.unlink(chunk_file_path)
+                    except Exception as e:
+                        logger.warning(f"[transcriber] Chunk {chunk_idx} file {chunk_file_path} failed to delete: {e}")
                 # Check if there are any segments transcribed.
                 if not new_segments:
                     logger.info(f"[transcriber] Chunk {chunk_idx} no speech found (transcribed in {trans_duration:.2f}s)")
                     continue
-
                 # Check if transcription took too long.
                 log_prefix = f"[transcriber] Chunk {chunk_idx} transcription took {trans_duration:.2f}s (for {speech_duration:.2f}s of speech)"
                 if trans_duration >= self.streaming_overlap_seconds:
-                    speed_ratio = trans_duration / chunk_duration
+                    speed_ratio = chunk_duration / trans_duration
                     logger.warning(f"{log_prefix} ({speed_ratio:.2f}x) which is >= {self.streaming_overlap_seconds}s) - transcription is lagging")
                     if self.config["notifications"]:
-                        self.notify("Transcription is lagging", f"Transcribing speed is{speed_ratio:.2f}x while for real-time need at least 2.0x. Transcription is lagging.", "dialog-warning", 3000)
+                        self.notify("Transcription is lagging", f"Transcribing speed is {speed_ratio:.2f}x while for real-time need at least 2.0x. Transcription is lagging.", "dialog-warning", 3000)
                 else:
                     logger.info(log_prefix)
-
                 # Process new segments.
                 text_to_remove = ""
                 text_to_type = ""
@@ -770,13 +760,10 @@ class StreamingDictation(Dictation):
         if not self.recording:
             return
         self.recording = False
-        # Wait for all active recordings to finish and queue them
-        for chunk_idx, (file_path, process, start_time) in list(self.active_recordings.items()):
-            if process.poll() is None:
-                process.wait()
-            if os.path.exists(file_path):
-                self.transcription_queue.put((file_path, start_time, chunk_idx, self.streaming_chunk_seconds))
-        self.active_recordings.clear()
+        self.stopping = True
+        # Notify about stopping.
+        logger.info("[idle] Recording stopped, transcribing remaining chunks...")
+        self.notify("Transcribing stopped", "Processing remaining chunks", "emblem-synchronizing", 1500)
         # Signal workers to stop
         self.transcription_queue.put(None)
         if self.config["auto_type"]:
@@ -790,9 +777,7 @@ class StreamingDictation(Dictation):
         except RuntimeError:
             # Already shut down, ignore
             pass
-
-        logger.info("[idle] Recording stopped, transcribing remaining chunks...")
-        self.notify("Transcribing stopped", "Processing remaining chunks", "emblem-synchronizing", 1500)
+        self.stopping = False
         # Finalize any remaining chunks
         final_text = self._finalize_transcription()
         if final_text:
@@ -803,6 +788,7 @@ class StreamingDictation(Dictation):
                 )
                 process.communicate(input=final_text.encode())
                 logger.info(f"[idle] Pasted to clipboard: {final_text}")
+            logger.info(f"[idle] Final text: {final_text}")
             self.notify("Got:", final_text[:100] + ("..." if len(final_text) > 100 else ""), "emblem-ok-symbolic", 3000)
         else:
             logger.info("[idle] No speech detected")
