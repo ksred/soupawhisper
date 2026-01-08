@@ -51,18 +51,40 @@ install_deps() {
     esac
 }
 
+# Detect Python package manager
+detect_python_manager() {
+    if command -v uv &> /dev/null; then
+        echo "uv"
+    elif command -v poetry &> /dev/null; then
+        echo "poetry"
+    else
+        echo "unknown"
+    fi
+}
+
 # Install Python dependencies
 install_python() {
     echo ""
     echo "Installing Python dependencies..."
 
-    if ! command -v poetry &> /dev/null; then
-        echo "Poetry not found. Please install Poetry first:"
-        echo "  curl -sSL https://install.python-poetry.org | python3 -"
-        exit 1
-    fi
+    local pm=$(detect_python_manager)
 
-    poetry install
+    case $pm in
+        uv)
+            echo "Using uv..."
+            uv sync
+            ;;
+        poetry)
+            echo "Using Poetry..."
+            poetry install
+            ;;
+        *)
+            echo "Neither uv nor Poetry found. Please install one:"
+            echo "  uv:     curl -LsSf https://astral.sh/uv/install.sh | sh"
+            echo "  Poetry: curl -sSL https://install.python-poetry.org | python3 -"
+            exit 1
+            ;;
+    esac
 }
 
 # Setup config file
@@ -91,10 +113,22 @@ install_service() {
     local xauthority="${XAUTHORITY:-$HOME/.Xauthority}"
     local venv_path="$SCRIPT_DIR/.venv"
 
-    # Check if venv exists
-    if [ ! -d "$venv_path" ]; then
-        venv_path=$(poetry env info --path 2>/dev/null || echo "$SCRIPT_DIR/.venv")
-    fi
+    # Detect Python package manager and get venv path
+    local pm=$(detect_python_manager)
+    case $pm in
+        uv)
+            # UV uses .venv in the script directory
+            venv_path="$SCRIPT_DIR/.venv"
+            ;;
+        poetry)
+            # Try to get Poetry's venv path, fallback to .venv
+            venv_path=$(poetry env info --path 2>/dev/null || echo "$SCRIPT_DIR/.venv")
+            ;;
+        *)
+            # Fallback to .venv
+            venv_path="$SCRIPT_DIR/.venv"
+            ;;
+    esac
 
     cat > "$SERVICE_DIR/soupawhisper.service" << EOF
 [Unit]
@@ -155,7 +189,18 @@ main() {
     echo "==================================="
     echo ""
     echo "To run manually:"
-    echo "  poetry run python dictate.py"
+    local pm=$(detect_python_manager)
+    case $pm in
+        uv)
+            echo "  uv run python dictate.py"
+            ;;
+        poetry)
+            echo "  poetry run python dictate.py"
+            ;;
+        *)
+            echo "  python dictate.py  # (after activating venv)"
+            ;;
+    esac
     echo ""
     echo "Config: $CONFIG_DIR/config.ini"
     echo "Hotkey: F12 (hold to record)"

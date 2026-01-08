@@ -1,11 +1,23 @@
-[tool.poetry]
+[project]
 name = "soupawhisper"
 version = "0.1.0"
-description = "Push-to-talk voice dictation for Linux using faster-whisper"
-authors = ["Kyle <kyle@ksred.com>"]
-license = "MIT"
+description = "Voice dictation for Linux using faster-whisper"
+authors = [
+    {name = "Kyle", email = "kyle@ksred.com"}
+]
+license = {text = "MIT"}
 readme = "README.md"
-repository = "https://github.com/ksred/soupawhisper"
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "pynput>=1.7.6",
+    "webrtcvad>=2.0.10",
+    "pyaudio>=0.2.0",
+]
+optional-dependencies.dev = [
+    "pytest>=8.0.0",
+    "pytest-timeout>=2.0.0"
+]
 keywords = ["whisper", "dictation", "voice", "transcription", "speech-to-text"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -18,13 +30,17 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
-package-mode = false
 
-[tool.poetry.dependencies]
-python = "^3.10"
-faster-whisper = "^1.0.0"
-pynput = "^1.7.6"
+[tool.pytest.ini_options]
+python_files = ["*_test.py", "*_tests.py"]
+markers = [
+    "timeout: mark test to timeout after specified seconds (deselect with '-m \"not timeout\"')",
+]
+addopts = "--timeout=2"
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["dictate"]

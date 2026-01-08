@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug: Streaming Mode",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/dictate.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--streaming"
+            ],
+            "justMyCode": false
+        },
+        {
+            "name": "Debug: Streaming Mode (Verbose)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/dictate.py",
+            "console": "integratedTerminal",
+            "args": [
+                "--streaming",
+                "--verbose"
+            ],
+            "justMyCode": false
+        }
+    ]
+}
