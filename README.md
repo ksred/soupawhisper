@@ -1,6 +1,10 @@
 # SoupaWhisper
 
-A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
+A simple push-to-talk voice dictation tool for Linux. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
+
+**Two backends available:**
+- **Local** - faster-whisper (runs on your machine, requires GPU for speed)
+- **Groq** - Cloud API (fast, free tier, no GPU needed)
 
 ## Requirements
 
@@ -44,7 +48,11 @@ sudo dnf install alsa-utils xclip xdotool libnotify
 sudo pacman -S alsa-utils xclip xdotool libnotify
 
 # Then install Python deps
-poetry install
+poetry install --extras local   # For local faster-whisper
+# OR
+poetry install --extras groq    # For Groq cloud API
+# OR
+poetry install --extras all     # For both backends
 ```
 
 ### GPU Support (Optional)
@@ -96,26 +104,39 @@ journalctl --user -u soupawhisper -f    # View logs
 
 Edit `~/.config/soupawhisper/config.ini`:
 
+### Using Groq Cloud API (Recommended for most users)
+
 ```ini
 [whisper]
-# Model size: tiny.en, base.en, small.en, medium.en, large-v3
-model = base.en
+backend = groq
 
-# Device: cpu or cuda (cuda requires cuDNN)
-device = cpu
-
-# Compute type: int8 for CPU, float16 for GPU
-compute_type = int8
+[groq]
+# Get your free API key at https://console.groq.com/
+api_key = your_api_key_here
+language = en  # or ru, de, fr, es, zh, ja, etc.
 
 [hotkey]
-# Key to hold for recording: f12, scroll_lock, pause, etc.
 key = f12
 
 [behavior]
-# Type text into active input field
 auto_type = true
+notifications = true
+```
 
-# Show desktop notification
+### Using Local faster-whisper
+
+```ini
+[whisper]
+backend = local
+model = base.en
+device = cpu
+compute_type = int8
+
+[hotkey]
+key = f12
+
+[behavior]
+auto_type = true
 notifications = true
 ```
 

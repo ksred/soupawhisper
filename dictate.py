@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SoupaWhisper - Voice dictation tool using faster-whisper.
+SoupaWhisper - Voice dictation tool using faster-whisper or Groq API.
 Hold the hotkey to record, release to transcribe and copy to clipboard.
 """
 
@@ -15,7 +15,10 @@ import os
 from pathlib import Path
 
 from pynput import keyboard
-from faster_whisper import WhisperModel
+
+# Optional imports based on backend
+WhisperModel = None
+requests = None
 
 __version__ = "0.1.0"
 
@@ -28,9 +31,12 @@ def load_config():
 
     # Defaults
     defaults = {
+        "backend": "local",  # "local" (faster-whisper) or "groq" (cloud API)
         "model": "base.en",
         "device": "cpu",
         "compute_type": "int8",
+        "api_key": "",       # Groq API key
+        "language": "en",    # Language for Groq API
         "key": "f12",
         "auto_type": "true",
         "notifications": "true",
@@ -40,9 +46,12 @@ def load_config():
         config.read(CONFIG_PATH)
 
     return {
+        "backend": config.get("whisper", "backend", fallback=defaults["backend"]),
         "model": config.get("whisper", "model", fallback=defaults["model"]),
         "device": config.get("whisper", "device", fallback=defaults["device"]),
         "compute_type": config.get("whisper", "compute_type", fallback=defaults["compute_type"]),
+        "api_key": config.get("groq", "api_key", fallback=defaults["api_key"]),
+        "language": config.get("groq", "language", fallback=defaults["language"]),
         "key": config.get("hotkey", "key", fallback=defaults["key"]),
         "auto_type": config.getboolean("behavior", "auto_type", fallback=True),
         "notifications": config.getboolean("behavior", "notifications", fallback=True),
@@ -65,11 +74,42 @@ def get_hotkey(key_name):
 
 
 HOTKEY = get_hotkey(CONFIG["key"])
+BACKEND = CONFIG["backend"]
 MODEL_SIZE = CONFIG["model"]
 DEVICE = CONFIG["device"]
 COMPUTE_TYPE = CONFIG["compute_type"]
+API_KEY = CONFIG["api_key"]
+LANGUAGE = CONFIG["language"]
 AUTO_TYPE = CONFIG["auto_type"]
 NOTIFICATIONS = CONFIG["notifications"]
+
+# Groq API settings
+GROQ_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3"  # Groq's Whisper model
+
+
+def transcribe_groq(audio_path):
+    """Transcribe audio using Groq Cloud API."""
+    global requests
+    if requests is None:
+        import requests as req
+        requests = req
+
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+
+    with open(audio_path, "rb") as f:
+        response = requests.post(
+            GROQ_API_URL,
+            headers=headers,
+            files={"file": ("audio.wav", f, "audio/wav")},
+            data={"model": GROQ_MODEL, "language": LANGUAGE},
+            timeout=30,
+        )
+
+    if not response.ok:
+        raise Exception(f"Groq API error {response.status_code}: {response.text}")
+
+    return response.json().get("text", "").strip()
 
 
 class Dictation:
@@ -81,13 +121,33 @@ class Dictation:
         self.model_loaded = threading.Event()
         self.model_error = None
         self.running = True
+        self.backend = BACKEND
 
-        # Load model in background
-        print(f"Loading Whisper model ({MODEL_SIZE})...")
-        threading.Thread(target=self._load_model, daemon=True).start()
+        if self.backend == "groq":
+            # Groq API - no model to load
+            if not API_KEY:
+                print("ERROR: Groq API key not configured!")
+                print("Add [groq] section with api_key to your config.ini")
+                print("Get your key at: https://console.groq.com/")
+                sys.exit(1)
+            self.model_loaded.set()
+            hotkey_name = HOTKEY.name if hasattr(HOTKEY, 'name') else HOTKEY.char
+            print(f"Using Groq Cloud API (language: {LANGUAGE})")
+            print(f"Ready for dictation!")
+            print(f"Hold [{hotkey_name}] to record, release to transcribe.")
+            print("Press Ctrl+C to quit.")
+        else:
+            # Local faster-whisper model
+            print(f"Loading Whisper model ({MODEL_SIZE})...")
+            threading.Thread(target=self._load_model, daemon=True).start()
 
     def _load_model(self):
+        """Load local faster-whisper model."""
+        global WhisperModel
         try:
+            if WhisperModel is None:
+                from faster_whisper import WhisperModel as WM
+                WhisperModel = WM
             self.model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE)
             self.model_loaded.set()
             hotkey_name = HOTKEY.name if hasattr(HOTKEY, 'name') else HOTKEY.char
@@ -119,7 +179,7 @@ class Dictation:
         )
 
     def start_recording(self):
-        if self.recording or self.model_error:
+        if self.recording or (self.backend == "local" and self.model_error):
             return
 
         self.recording = True
@@ -155,25 +215,30 @@ class Dictation:
             self.record_process = None
 
         print("Transcribing...")
-        self.notify("Transcribing...", "Processing your speech", "emblem-synchronizing", 30000)
+        if self.backend == "groq":
+            self.notify("Transcribing...", "Sending to Groq API", "emblem-synchronizing", 30000)
+        else:
+            self.notify("Transcribing...", "Processing your speech", "emblem-synchronizing", 30000)
 
-        # Wait for model if not loaded yet
+        # Wait for model if not loaded yet (local backend)
         self.model_loaded.wait()
 
-        if self.model_error:
+        if self.backend == "local" and self.model_error:
             print(f"Cannot transcribe: model failed to load")
             self.notify("Error", "Model failed to load", "dialog-error", 3000)
             return
 
         # Transcribe
         try:
-            segments, info = self.model.transcribe(
-                self.temp_file.name,
-                beam_size=5,
-                vad_filter=True,
-            )
-
-            text = " ".join(segment.text.strip() for segment in segments)
+            if self.backend == "groq":
+                text = transcribe_groq(self.temp_file.name)
+            else:
+                segments, info = self.model.transcribe(
+                    self.temp_file.name,
+                    beam_size=5,
+                    vad_filter=True,
+                )
+                text = " ".join(segment.text.strip() for segment in segments)
 
             if text:
                 # Copy to clipboard using xclip
