@@ -1,19 +1,20 @@
 # SoupaWhisper
 
-A simple push-to-talk voice dictation tool for Linux using faster-whisper. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
+A simple push-to-talk voice dictation tool using faster-whisper. Hold a key to record, release to transcribe, and it automatically copies to clipboard and types into the active input.
 
 ## Requirements
 
 - Python 3.10+
 - Poetry
-- Linux with X11 (ALSA audio)
 
-## Supported Distros
+## Supported Platforms
 
-- Ubuntu / Pop!_OS / Debian (apt)
-- Fedora (dnf)
-- Arch Linux (pacman)
-- openSUSE (zypper)
+- **macOS** (arm64 and x86_64)
+- **Linux** with X11 (ALSA audio)
+  - Ubuntu / Pop!_OS / Debian (apt)
+  - Fedora (dnf)
+  - Arch Linux (pacman)
+  - openSUSE (zypper)
 
 ## Installation
 
@@ -31,7 +32,21 @@ The installer will:
 4. Set up the config file
 5. Optionally install as a systemd service
 
-### Manual Installation
+### macOS Installation
+
+```bash
+# Install sox for audio recording
+brew install sox
+
+# Install Python dependencies
+poetry install
+```
+
+**Note:** On first run, you may need to grant permissions in **System Settings > Privacy & Security**:
+- **Accessibility** - for auto-typing feature
+- **Microphone** - for audio recording
+
+### Linux Installation
 
 ```bash
 # Ubuntu/Debian
@@ -74,7 +89,27 @@ poetry run python dictate.py
 - Release to transcribe → copies to clipboard and types into active input
 - Press **Ctrl+C** to quit (when running manually)
 
-## Run as a systemd Service
+### macOS: Run as Background Process
+
+To use with other terminal apps like Claude Code, Codex etc:
+
+1. Start the dictation service in the background:
+   ```bash
+   nohup poetry run python dictate.py > /dev/null 2>&1 &
+   ```
+
+2. Switch to your target app (iTerm, Claude Code, Codex, etc.)
+
+3. Hold **F12** to record, release to transcribe - text types at your cursor
+
+To stop the background process:
+```bash
+pkill -f "python dictate.py"
+```
+
+To use from non-terminal apps, hold F12 to record and transcribe, the text is copied to clipboard.
+
+### Linux: Run as a systemd Service
 
 The installer can set this up automatically. If you skipped it, run:
 
