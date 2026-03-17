@@ -61,7 +61,7 @@ sudo apt install libcudnn9-cuda-12
 Then edit `~/.config/soupawhisper/config.ini`:
 ```ini
 device = cuda
-compute_type = float16
+compute_type = float16 (or float32)
 ```
 
 ## Usage
@@ -104,7 +104,7 @@ model = base.en
 # Device: cpu or cuda (cuda requires cuDNN)
 device = cpu
 
-# Compute type: int8 for CPU, float16 for GPU
+# Compute type: int8 for CPU, float16 (or float32) for GPU
 compute_type = int8
 
 [hotkey]
