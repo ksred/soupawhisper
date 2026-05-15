@@ -9,9 +9,11 @@ import configparser
 import subprocess
 import tempfile
 import threading
+import time
 import signal
 import sys
 import os
+from enum import Enum
 from pathlib import Path
 
 from pynput import keyboard
@@ -32,8 +34,9 @@ def load_config():
         "device": "cpu",
         "compute_type": "int8",
         "key": "f12",
-        "auto_type": "true",
-        "notifications": "true",
+        "auto_type": True,
+        "notifications": True,
+        "long_press": 0.4,
     }
 
     if CONFIG_PATH.exists():
@@ -44,8 +47,9 @@ def load_config():
         "device": config.get("whisper", "device", fallback=defaults["device"]),
         "compute_type": config.get("whisper", "compute_type", fallback=defaults["compute_type"]),
         "key": config.get("hotkey", "key", fallback=defaults["key"]),
-        "auto_type": config.getboolean("behavior", "auto_type", fallback=True),
-        "notifications": config.getboolean("behavior", "notifications", fallback=True),
+        "auto_type": config.getboolean("behavior", "auto_type", fallback=defaults["auto_type"]),
+        "notifications": config.getboolean("behavior", "notifications", fallback=defaults["notifications"]),
+        "long_press": config.getfloat("behavior", "long_press", fallback=defaults["long_press"])
     }
 
 
@@ -70,6 +74,14 @@ DEVICE = CONFIG["device"]
 COMPUTE_TYPE = CONFIG["compute_type"]
 AUTO_TYPE = CONFIG["auto_type"]
 NOTIFICATIONS = CONFIG["notifications"]
+LONG_PRESS = CONFIG["long_press"]
+
+
+class State(Enum):
+    IDLE = "idle"
+    HOLDING = "holding"
+    TOGGLED = "toggled"
+    STOPPING = "stopping"
 
 
 class Dictation:
@@ -81,6 +93,11 @@ class Dictation:
         self.model_loaded = threading.Event()
         self.model_error = None
         self.running = True
+        # Toggle vs. hold-to-record state
+        self.lock = threading.Lock()
+        self.state = State.IDLE
+        self.key_down = False
+        self.press_time = 0.0
 
         # Load model in background
         print(f"Loading Whisper model ({MODEL_SIZE})...")
@@ -202,12 +219,36 @@ class Dictation:
                 os.unlink(self.temp_file.name)
 
     def on_press(self, key):
-        if key == HOTKEY:
-            self.start_recording()
+        if key != HOTKEY:
+            return
+        with self.lock:
+            if self.key_down:  # ignore OS auto-repeat
+                return
+            self.key_down = True
+            self.press_time = time.monotonic()
+            if self.state is State.IDLE:
+                self.state = State.HOLDING
+                self.start_recording()  # always start recording
+            elif self.state is State.TOGGLED:
+                self.state = State.STOPPING  # will stop on release
 
     def on_release(self, key):
-        if key == HOTKEY:
-            self.stop_recording()
+        if key != HOTKEY:
+            return
+        with self.lock:
+            if not self.key_down:
+                return
+            self.key_down = False
+            duration = time.monotonic() - self.press_time
+            if self.state is State.HOLDING:
+                if duration < LONG_PRESS:
+                    self.state = State.TOGGLED  # tap → stay recording
+                else:
+                    self.state = State.IDLE
+                    self.stop_recording()  # hold → stop
+            elif self.state is State.STOPPING:
+                self.state = State.IDLE
+                self.stop_recording()  # second press → stop
 
     def stop(self):
         print("\nExiting...")
