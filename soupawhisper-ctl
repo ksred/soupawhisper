@@ -1,0 +1,355 @@
+#!/bin/bash
+# SoupaWhisper Control CLI
+
+SERVICE="soupawhisper"
+CONFIG_FILE="$HOME/.config/soupawhisper/config.ini"
+
+get_current_model() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        model=$(grep -E "^model[ \t]*=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        echo "${model:-base.en}"
+    else
+        echo "base.en"
+    fi
+}
+
+get_current_hotkey() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        key=$(grep -E "^key[ \t]*=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        echo "${key:-f12}"
+    else
+        echo "f12"
+    fi
+}
+
+set_hotkey() {
+    local key="$1"
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "Config file not found: $CONFIG_FILE"
+        echo "Run install.sh first to create the config."
+        return 1
+    fi
+
+    # Use awk to only modify key under [hotkey] section
+    awk -v newkey="$key" '
+        BEGIN { in_hotkey=0; found=0 }
+        /^\[hotkey\]/ { in_hotkey=1; print; next }
+        /^\[/ && !/^\[hotkey\]/ { in_hotkey=0 }
+        in_hotkey && /^key[ \t]*=/ { print "key = " newkey; found=1; next }
+        { print }
+        END {
+            if (!found) {
+                print ""
+                print "[hotkey]"
+                print "key = " newkey
+            }
+        }
+    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+}
+
+detect_key() {
+    echo ""
+    echo "Press any key to detect its name (Ctrl+C to cancel)..."
+    echo ""
+
+    # Disable terminal echo to prevent key from being displayed
+    stty -echo 2>/dev/null
+
+    # Create temp script
+    local temp_script=$(mktemp)
+    cat > "$temp_script" << 'PYTHON'
+from pynput import keyboard
+import sys
+
+def on_press(key):
+    if hasattr(key, "name"):
+        print(key.name, flush=True)
+    elif hasattr(key, "char") and key.char:
+        print(key.char, flush=True)
+    else:
+        print("unknown", flush=True)
+    return False
+
+with keyboard.Listener(on_press=on_press) as listener:
+    listener.join()
+PYTHON
+
+    # Try to find a Python with pynput installed
+    local python_cmd=""
+    local service_file="$HOME/.config/systemd/user/soupawhisper.service"
+
+    # Extract Python path from systemd service file (most reliable)
+    if [[ -f "$service_file" ]]; then
+        python_cmd=$(grep ExecStart "$service_file" | sed 's/ExecStart=//' | awk '{print $1}')
+    fi
+
+    # Fallback to system python
+    if [[ -z "$python_cmd" || ! -x "$python_cmd" ]]; then
+        python_cmd="python3"
+    fi
+
+    # Run the detection script
+    detected=$("$python_cmd" "$temp_script" 2>/dev/null)
+    rm -f "$temp_script"
+
+    # Re-enable terminal echo
+    stty echo 2>/dev/null
+
+    # Trim whitespace/newlines
+    detected=$(echo "$detected" | tr -d '\n\r' | xargs)
+
+    if [[ -n "$detected" ]]; then
+        # Flush any buffered input (the detected key may have been typed to stdin)
+        read -t 0.1 -n 10000 discard 2>/dev/null || true
+
+        echo "Detected key: $detected"
+        echo ""
+        read -p "Use '$detected' as hotkey? (y/n): " use_it
+        if [[ "$use_it" == "y" || "$use_it" == "Y" ]]; then
+            set_hotkey "$detected"
+            return 0
+        fi
+    else
+        echo "Could not detect key."
+        echo "Make sure soupawhisper is installed (pynput required)."
+    fi
+    return 1
+}
+
+show_hotkey_menu() {
+    echo ""
+    echo "======== Select Hotkey ========"
+    echo ""
+    echo "  Current: $(get_current_hotkey)"
+    echo ""
+    echo "  --- Function Keys ---"
+    echo "  1) f12  (default)"
+    echo "  2) f11"
+    echo "  3) f10"
+    echo "  4) f9"
+    echo "  5) f8"
+    echo ""
+    echo "  --- Special Keys ---"
+    echo "  6) scroll_lock"
+    echo "  7) pause"
+    echo "  8) insert"
+    echo ""
+    echo "  d) Detect key (press any key)"
+    echo "  c) Custom (enter name manually)"
+    echo "  b) Back"
+    echo ""
+}
+
+select_hotkey() {
+    while true; do
+        show_hotkey_menu
+        read -p "Select hotkey: " choice
+
+        case $choice in
+            1) set_hotkey "f12" ;;
+            2) set_hotkey "f11" ;;
+            3) set_hotkey "f10" ;;
+            4) set_hotkey "f9" ;;
+            5) set_hotkey "f8" ;;
+            6) set_hotkey "scroll_lock" ;;
+            7) set_hotkey "pause" ;;
+            8) set_hotkey "insert" ;;
+            d|D)
+                if detect_key; then
+                    echo ""
+                    echo "Hotkey set to: $(get_current_hotkey)"
+                    echo ""
+                    read -p "Restart service to apply? (y/n): " restart
+                    if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+                        systemctl --user restart $SERVICE
+                        echo "Service restarted."
+                    fi
+                    return
+                fi
+                continue
+                ;;
+            c|C)
+                echo ""
+                echo "Valid key names: f1-f20, scroll_lock, pause, insert, home, end"
+                echo "Or single characters like: - = [ ] etc."
+                read -p "Enter key name: " custom_key
+                if [[ -n "$custom_key" ]]; then
+                    set_hotkey "$custom_key"
+                else
+                    echo "No key entered."
+                    continue
+                fi
+                ;;
+            b|B) return ;;
+            *) echo "Invalid option."; continue ;;
+        esac
+
+        echo ""
+        echo "Hotkey set to: $(get_current_hotkey)"
+        echo ""
+        read -p "Restart service to apply? (y/n): " restart
+        if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+            systemctl --user restart $SERVICE
+            echo "Service restarted."
+        fi
+        return
+    done
+}
+
+set_model() {
+    local model="$1"
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "Config file not found: $CONFIG_FILE"
+        return 1
+    fi
+
+    # Use awk to only modify model under [whisper] section
+    awk -v newmodel="$model" '
+        BEGIN { in_whisper=0 }
+        /^\[whisper\]/ { in_whisper=1; print; next }
+        /^\[/ && !/^\[whisper\]/ { in_whisper=0 }
+        in_whisper && /^model[ \t]*=/ { print "model = " newmodel; next }
+        { print }
+    ' "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+}
+
+show_status() {
+    echo ""
+    systemctl --user status $SERVICE --no-pager 2>/dev/null | head -5
+    echo ""
+}
+
+show_model_menu() {
+    echo ""
+    echo "======== Select Whisper Model ========"
+    echo ""
+    echo "  Current: $(get_current_model)"
+    echo ""
+    echo "  --- Standard Models ---"
+    echo "  1) tiny.en     (fastest, ~75MB)"
+    echo "  2) base.en     (fast, good quality)"
+    echo "  3) small.en    (medium speed, better)"
+    echo "  4) medium.en   (slower, great)"
+    echo "  5) large-v3    (slowest, best)"
+    echo ""
+    echo "  --- Distilled Models (faster, near-original quality) ---"
+    echo "  6) distil-large-v3   (2x faster than large-v3)"
+    echo "  7) distil-large-v2   (2x faster than large-v2)"
+    echo "  8) large-v3-turbo    (4x faster, great quality)"
+    echo ""
+    echo "  --- Cloud (Groq API — no GPU needed, requires internet) ---"
+    echo "  9)  groq large-v3-turbo  (cloud, fastest)"
+    echo "  10) groq large-v3        (cloud, most accurate)"
+    echo ""
+    echo "  b) Back"
+    echo ""
+}
+
+select_model() {
+    while true; do
+        show_model_menu
+        read -p "Select model: " choice
+
+        case $choice in
+            1) set_model "tiny.en" ;;
+            2) set_model "base.en" ;;
+            3) set_model "small.en" ;;
+            4) set_model "medium.en" ;;
+            5) set_model "large-v3" ;;
+            6) set_model "Systran/faster-distil-whisper-large-v3" ;;
+            7) set_model "Systran/faster-distil-whisper-large-v2" ;;
+            8) set_model "deepdml/faster-whisper-large-v3-turbo-ct2" ;;
+            9) set_model "groq:whisper-large-v3-turbo" ;;
+            10) set_model "groq:whisper-large-v3" ;;
+            b|B) return ;;
+            *) echo "Invalid option."; continue ;;
+        esac
+
+        echo ""
+        echo "Model set to: $(get_current_model)"
+        echo ""
+        read -p "Restart service to apply? (y/n): " restart
+        if [[ "$restart" == "y" || "$restart" == "Y" ]]; then
+            systemctl --user restart $SERVICE
+            echo "Service restarted."
+        fi
+        return
+    done
+}
+
+show_menu() {
+    echo "================================"
+    echo "   SoupaWhisper Control"
+    echo "================================"
+    echo ""
+    echo "  Model:  $(get_current_model)"
+    echo "  Hotkey: $(get_current_hotkey)"
+    echo ""
+    echo "  1) Start"
+    echo "  2) Stop"
+    echo "  3) Restart"
+    echo "  4) Status"
+    echo "  5) Select Model"
+    echo "  6) Change Hotkey"
+    echo "  7) Enable auto-start"
+    echo "  8) Disable auto-start"
+    echo "  9) View logs"
+    echo "  q) Quit"
+    echo ""
+}
+
+while true; do
+    show_menu
+    read -p "Choose an option: " choice
+
+    case $choice in
+        1)
+            echo "Starting SoupaWhisper..."
+            systemctl --user start $SERVICE
+            show_status
+            ;;
+        2)
+            echo "Stopping SoupaWhisper..."
+            systemctl --user stop $SERVICE
+            echo "Stopped."
+            ;;
+        3)
+            echo "Restarting SoupaWhisper..."
+            systemctl --user restart $SERVICE
+            show_status
+            ;;
+        4)
+            systemctl --user status $SERVICE --no-pager
+            ;;
+        5)
+            select_model
+            ;;
+        6)
+            select_hotkey
+            ;;
+        7)
+            systemctl --user enable $SERVICE
+            echo "Auto-start enabled."
+            ;;
+        8)
+            systemctl --user disable $SERVICE
+            echo "Auto-start disabled."
+            ;;
+        9)
+            journalctl --user -u $SERVICE -n 30 --no-pager
+            ;;
+        q|Q)
+            echo "Bye!"
+            exit 0
+            ;;
+        *)
+            echo "Invalid option."
+            ;;
+    esac
+
+    echo ""
+    read -p "Press Enter to continue..."
+    clear
+done

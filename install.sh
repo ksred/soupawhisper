@@ -79,6 +79,24 @@ setup_config() {
     fi
 }
 
+# Install soupawhisper-ctl onto PATH
+install_ctl() {
+    echo ""
+    echo "Installing soupawhisper-ctl..."
+
+    local bin_dir="$HOME/.local/bin"
+    mkdir -p "$bin_dir"
+    ln -sf "$SCRIPT_DIR/soupawhisper-ctl" "$bin_dir/soupawhisper-ctl"
+    chmod +x "$SCRIPT_DIR/soupawhisper-ctl"
+
+    echo "Linked soupawhisper-ctl -> $bin_dir/soupawhisper-ctl"
+    case ":$PATH:" in
+        *":$bin_dir:"*) ;;
+        *) echo "Note: $bin_dir is not on your PATH. Add it in your shell profile, e.g.:"
+           echo "  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+    esac
+}
+
 # Install systemd service
 install_service() {
     echo ""
@@ -140,6 +158,7 @@ main() {
     install_deps
     install_python
     setup_config
+    install_ctl
 
     echo ""
     read -p "Install as systemd service? [y/N] " -n 1 -r
@@ -160,6 +179,8 @@ main() {
     echo "Config: $CONFIG_DIR/config.ini"
     echo "Hotkey: F12 (hold to record)"
     echo "Exit:   Ctrl+C"
+    echo ""
+    echo "Control panel: soupawhisper-ctl (installed to ~/.local/bin)"
 }
 
 main "$@"

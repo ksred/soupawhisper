@@ -24,6 +24,7 @@ package-mode = false
 python = "^3.10"
 faster-whisper = "^1.0.0"
 pynput = "^1.7.6"
+requests = "^2.32.0"  # used by the groq: cloud backend
 
 [build-system]
 requires = ["poetry-core"]

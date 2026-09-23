@@ -92,6 +92,25 @@ systemctl --user status soupawhisper    # Status
 journalctl --user -u soupawhisper -f    # View logs
 ```
 
+### Control Panel
+
+A TUI control panel is included for easy management. `install.sh` symlinks it into `~/.local/bin`, so after installing it's just:
+
+```bash
+soupawhisper-ctl
+```
+
+(Or run it directly from the repo with `./soupawhisper-ctl` without installing.)
+
+Features:
+- Start/stop/restart the service
+- Switch Whisper models (standard + distilled)
+- Change hotkey (F12, F11, or detect any key)
+- Enable/disable auto-start
+- View logs
+
+The control panel edits `~/.config/soupawhisper/config.ini` and restarts the service to apply changes.
+
 ## Configuration
 
 Edit `~/.config/soupawhisper/config.ini`:
@@ -114,6 +133,9 @@ key = f12
 [behavior]
 # Type text into active input field
 auto_type = true
+
+# Copy transcription to clipboard (set false to type only, leaving clipboard untouched)
+copy_to_clipboard = true
 
 # Show desktop notification
 notifications = true
@@ -150,6 +172,7 @@ Install cuDNN 9 (see GPU Support section above) or switch to CPU mode.
 
 ## Model Sizes
 
+### Standard Models
 | Model | Size | Speed | Accuracy |
 |-------|------|-------|----------|
 | tiny.en | ~75MB | Fastest | Basic |
@@ -158,4 +181,32 @@ Install cuDNN 9 (see GPU Support section above) or switch to CPU mode.
 | medium.en | ~1.5GB | Slower | Great |
 | large-v3 | ~3GB | Slowest | Best |
 
-For dictation, `base.en` or `small.en` is usually the sweet spot.
+### Distilled Models (Recommended)
+| Model | Speed vs large-v3 | Accuracy |
+|-------|-------------------|----------|
+| distil-large-v3 | ~2x faster | ~99% of large-v3 |
+| distil-large-v2 | ~2x faster | ~99% of large-v2 |
+| large-v3-turbo | ~4x faster | ~97% of large-v3 |
+
+Distilled models offer near-original quality with significantly better speed. For dictation with GPU, `large-v3-turbo` or `distil-large-v3` are excellent choices. For CPU or low VRAM, `small.en` or `base.en` work well.
+
+The distilled/turbo entries in `soupawhisper-ctl`'s model menu (`Systran/faster-distil-whisper-large-v3`, `Systran/faster-distil-whisper-large-v2`, `deepdml/faster-whisper-large-v3-turbo-ct2`) are third-party CTranslate2 conversions hosted on Hugging Face, not maintained by this project or by OpenAI/Systran/deepdml as an official faster-whisper release. Repo names, availability, and conversion quality may change upstream without notice.
+
+## Groq Cloud Backend
+
+For cloud-based transcription without local GPU or model downloads, use Groq's hosted Whisper API.
+
+Set the model to `groq:<model-name>` in your config:
+
+```ini
+[whisper]
+model = groq:whisper-large-v3-turbo
+```
+
+Requires `GROQ_API_KEY` in your environment. Falls back to reading a `GROQ_API_KEY=...` line from `~/.config/soupawhisper/.env` if the env var is unset.
+
+Available Groq models:
+- `whisper-large-v3-turbo` - fast, high quality
+- `whisper-large-v3` - highest accuracy
+
+Audio is sent to Groq's API for transcription. No local compute needed.
